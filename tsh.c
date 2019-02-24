@@ -161,6 +161,12 @@ void eval(const char *cmdline)
         exit(0); 
     }
     
+    // foreground job
+    else if (token.builtin == BUILTIN_FG)
+    {
+        printf("This is foreground job\n");
+    }
+    
     // if not builtin command
     else if (token.builtin == BUILTIN_NONE) 
     {
@@ -170,13 +176,15 @@ void eval(const char *cmdline)
         // fork the current process
         pid_t pid = fork();
         
+        // unblocking SIGCHLD, SIGINT, and SIGTSTP signals
+        unblock_signals();
         
         // process id of child is receievd by parent
         // use that proecss id to add job to the joblist
-        if (pid != 0)     
+        if (pid > 0)     
         {
             // adding job to the joblist
-            addjob(job_list, pid, FG, cmdline);
+            // addjob(job_list, pid, FG, cmdline);
             
             // unblocking SIGCHLD, SIGINT, and SIGTSTP signals
             unblock_signals();
@@ -187,14 +195,17 @@ void eval(const char *cmdline)
             // getting job to do
             // struct job_t *todo_job = getjobpid(job_list, fg_pid)
                 
-            // executing the job
-            Execve(token.argv[0], token.argv, environ);
             
             // wait for the foreground job to terminate
-            // TODO:
             int status;
             waitpid(pid, &status, WUNTRACED);
+
         }
+        
+        else if (pid == 0) {     // child process
+            // executing the job
+            Execve(token.argv[0], token.argv, environ);
+        }  
     }
     return;
 }
