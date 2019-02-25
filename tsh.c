@@ -34,9 +34,14 @@ void sigint_handler(int sig);
 void sigquit_handler(int sig);
 
 // TODO:
-// new function prototypes
-void block_signals();
+sigset_t block_signals();
 void unblock_signals();
+
+// global variables
+int user_interrupt;
+// TODO:make the mask global 
+// TODO:make a mask function that create masks based on input arguments
+
 /*
  * <Write main's function header documentation. What does main do?>
  * "Each function should be prefaced with a comment describing the purpose
@@ -86,6 +91,9 @@ int main(int argc, char **argv)
 
     // Initialize the job list
     initjobs(job_list);
+    
+    // initially user interrupt 0
+    user_interrupt = 0;
 
     // Execute the shell's read/eval loop
     while (true)
@@ -154,55 +162,84 @@ void eval(const char *cmdline)
         return;
     }
     
-    // TODO:
-    // if builtin QUIT command
+    // builtin QUIT command
     if (token.builtin == BUILTIN_QUIT)
     {
         exit(0); 
     }
     
-    // foreground job
+    // builtin jobs command
+    else if (token.builtin == BUILTIN_JOBS)
+    {
+        printf("Jobs command");
+    }
+    
+    // builtin foreground job
     else if (token.builtin == BUILTIN_FG)
     {
         printf("This is foreground job\n");
     }
     
-    // if not builtin command
-    else if (token.builtin == BUILTIN_NONE) 
+    // built in background job
+    else if (token.builtin == BUILTIN_BG) 
+    {
+        printf("This is background job\n");
+    }
+    
+    else // non builtin commands
     {
         // block SIGCHLD, SIGINT, and SIGTSTP signals
-        block_signals();
+        sigset_t old_mask = block_signals();
         
         // fork the current process
-        pid_t pid = fork();
-        
-        // unblocking SIGCHLD, SIGINT, and SIGTSTP signals
-        unblock_signals();
+        pid_t pid = Fork();
         
         // process id of child is receievd by parent
         // use that proecss id to add job to the joblist
-        if (pid > 0)     
-        {
-            // adding job to the joblist
-            // addjob(job_list, pid, FG, cmdline);
-            
-            // unblocking SIGCHLD, SIGINT, and SIGTSTP signals
-            unblock_signals();
-            
-            // get foregorund job process id
-            // pid_t fg_pid = fg_pid(job_list);
-            
-            // getting job to do
-            // struct job_t *todo_job = getjobpid(job_list, fg_pid)
+        if (pid > 0)    
+        {       
+            if (parse_result == PARSELINE_FG) // Foreground job
+            {   
+                // adding job to the joblist
+                // addjob(job_list, pid, FG, cmdline);
                 
-            
-            // wait for the foreground job to terminate
-            int status;
-            waitpid(pid, &status, WUNTRACED);
+                // sigsuspend
+                while (!user_interrupt) {
+                    Sigsuspend(&old_mask);
+                }
+                user_interrupt = 0;
 
+                Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
+                
+                // ublock signals
+                unblock_signals();
+            }
+            else if (parse_result == PARSELINE_BG) // Background job
+            {
+                // getting job id
+                int job_id = pid2jid(job_list, pid); 
+                
+                // adding job to the joblist
+                addjob(job_list, pid, BG, cmdline);
+                
+                printf("[%d] (%d) %s\n", job_id+1, pid, cmdline);
+                
+                Signal(SIGCHLD, sigchld_handler);
+            }
         }
         
         else if (pid == 0) {     // child process
+            // ublocking the signals
+            unblock_signals();
+            
+            // Restore the signals to default
+            Signal(SIGCHLD, SIG_DFL);
+            Signal(SIGINT, SIG_DFL);
+            Signal(SIGTSTP, SIG_DFL);
+            
+            // Set new process group id
+            Setpgid(0, 0);
+            
             // executing the job
             Execve(token.argv[0], token.argv, environ);
         }  
@@ -219,6 +256,24 @@ void eval(const char *cmdline)
  */
 void sigchld_handler(int sig) 
 {
+    int status;
+    pid_t pid;
+    while (1)
+    {
+        pid = waitpid(-1, &status, WUNTRACED | WNOHANG);
+        if (pid < 0)
+        {
+          break;
+        }
+        if (pid == 0)
+            break;
+        
+        // TODO: only in the case of the job killed or exitede normally
+        // delete the job from the job list
+        // deletejob(job_list, pid);
+    }
+    user_interrupt = 1;
+    
     return;
 }
 
@@ -241,15 +296,16 @@ void sigtstp_handler(int sig)
 /*
  * block SIGCHLD, SIGINT, and SIGTSTP signals
  */
-void block_signals() 
+sigset_t block_signals() 
 {
     sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGTSTP);
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGCHLD);
+    Sigaddset(&mask, SIGINT);
+    Sigaddset(&mask, SIGTSTP);
     sigset_t old_mask;
-    sigprocmask(SIG_BLOCK, &mask, &old_mask);
+    Sigprocmask(SIG_BLOCK, &mask, &old_mask);
+    return old_mask;
 }
 
 /*
@@ -265,4 +321,3 @@ void unblock_signals()
     sigset_t old_mask;
     sigprocmask(SIG_UNBLOCK, &mask, &old_mask);
 }
-
