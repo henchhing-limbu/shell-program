@@ -36,6 +36,8 @@ void sigquit_handler(int sig);
 // TODO:
 sigset_t block_signals();
 void unblock_signals();
+void handle_background(const char *cmdline, pid_t pid);
+void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask);
 
 // global variables
 int user_interrupt;
@@ -150,101 +152,92 @@ void eval(const char *cmdline)
 {
     parseline_return parse_result;     
     struct cmdline_tokens token;
-    // sigset_t ourmask;
-    // TODO: remove the line below! It's only here to keep the compiler happy
-    // Sigemptyset(&ourmask);
-
-    // Parse command line
-    parse_result = parseline(cmdline, &token);
+    
+    parse_result = parseline(cmdline, &token);		    // Parse command line
 
     if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
     {
         return;
     }
-    
-    // builtin QUIT command
-    if (token.builtin == BUILTIN_QUIT)
+     
+    if (token.builtin == BUILTIN_QUIT)                      // builtin QUIT command
     {
         exit(0); 
     }
-    
-    // builtin jobs command
-    else if (token.builtin == BUILTIN_JOBS)
+    else if (token.builtin == BUILTIN_JOBS)                 // builtin JOBS command
     {
-        printf("Jobs command");
+	block_signals();
+        listjobs(job_list, STDOUT_FILENO);
+        unblock_signals();
     }
-    
-    // builtin foreground job
-    else if (token.builtin == BUILTIN_FG)
+    else if (token.builtin == BUILTIN_FG)                   // builtin foreground job
     {
         printf("This is foreground job\n");
     }
-    
-    // built in background job
-    else if (token.builtin == BUILTIN_BG) 
+    else if (token.builtin == BUILTIN_BG)                   // built in background job
     {
         printf("This is background job\n");
     }
     
-    else // non builtin commands
+    else                                                    // Non builtin commands
     {
-        // block SIGCHLD, SIGINT, and SIGTSTP signals
-        sigset_t old_mask = block_signals();
-        
-        // fork the current process
-        pid_t pid = Fork();
-        
-        // process id of child is receievd by parent
-        // use that proecss id to add job to the joblist
-        if (pid > 0)    
+	sigset_t old_mask = block_signals();
+        pid_t pid = Fork();                                 // fork the current process
+        if (pid > 0)                                        // parent process
         {       
-            if (parse_result == PARSELINE_FG) // Foreground job
+            if (parse_result == PARSELINE_FG)               // Foreground job
             {   
-                // adding job to the joblist
-                // addjob(job_list, pid, FG, cmdline);
-                
-                // sigsuspend
-                while (!user_interrupt) {
-                    Sigsuspend(&old_mask);
-                }
-                user_interrupt = 0;
-
-                Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
-                
-                // ublock signals
-                unblock_signals();
+                handle_foreground(cmdline, pid, &old_mask);
             }
-            else if (parse_result == PARSELINE_BG) // Background job
+            else if (parse_result == PARSELINE_BG)          // Background job
             {
-                // getting job id
-                int job_id = pid2jid(job_list, pid); 
-                
-                // adding job to the joblist
-                addjob(job_list, pid, BG, cmdline);
-                
-                printf("[%d] (%d) %s\n", job_id+1, pid, cmdline);
-                
-                Signal(SIGCHLD, sigchld_handler);
+                handle_background(cmdline, pid);
             }
         }
         
-        else if (pid == 0) {     // child process
-            // ublocking the signals
+        else if (pid == 0) {     			    			// child process
             unblock_signals();
             
-            // Restore the signals to default
+			// Restore the signals to default
             Signal(SIGCHLD, SIG_DFL);
             Signal(SIGINT, SIG_DFL);
             Signal(SIGTSTP, SIG_DFL);
             
-            // Set new process group id
-            Setpgid(0, 0);
+            Setpgid(0, 0);				    				// set new process id group for child process
             
-            // executing the job
-            Execve(token.argv[0], token.argv, environ);
-        }  
+            Execve(token.argv[0], token.argv, environ);	    // executing the job
+        }
+		unblock_signals();  
     }
     return;
+}
+
+/*
+ * handles non built in backgorund job
+ */
+void handle_background(const char *cmdline, pid_t pid)
+{
+    addjob(job_list, pid, BG, cmdline);                 
+    struct job_t *j = getjobpid(job_list, pid);        
+    printf("[%d] (%d) %s\n", j->jid, pid, cmdline);
+    Signal(SIGCHLD, sigchld_handler);
+    // Signal(SIGINT, sigint_handler);
+    // Signal(SIGTSTP, sigtstp_handler);
+    // unblock_signals();
+}
+
+/*
+ * handles non built in foreground job 
+ */ 
+void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
+{
+    addjob(job_list, pid, FG, cmdline);
+    while (!user_interrupt) {
+        Sigsuspend(mask);
+    }
+    user_interrupt = 0;
+    Sigprocmask(SIG_UNBLOCK, mask, NULL);
+    // unblock_signals();
 }
 
 /*****************
@@ -252,44 +245,70 @@ void eval(const char *cmdline)
  *****************/
 
 /* 
- * <What does sigchld_handler do?>
+ * handles sigchld handler
  */
 void sigchld_handler(int sig) 
 {
+    block_signals();
     int status;
-    pid_t pid;
+    pid_t pid, fg_pid;
     while (1)
     {
         pid = waitpid(-1, &status, WUNTRACED | WNOHANG);
-        if (pid < 0)
-        {
+        if (pid < 0)    					// No child processes left
           break;
-        }
-        if (pid == 0)
+        if (pid == 0)   					// No child processes with state changed
             break;
         
-        // TODO: only in the case of the job killed or exitede normally
-        // delete the job from the job list
-        // deletejob(job_list, pid);
-    }
-    user_interrupt = 1;
-    
+        fg_pid = fgpid(job_list);
+        if (pid == fg_pid)    
+		{
+            user_interrupt = 1;
+		}
+		
+		if  (WIFEXITED(status))								// child process terminated normally
+        {
+            deletejob(job_list, pid);							// delete the job from the job list
+        }
+        else if (WIFSTOPPED(status))							// child process currently stopped
+        {
+            struct job_t *job = getjobpid(job_list, pid);
+            job->state = ST;
+			sio_puts("Job [1] (");
+			sio_putl(pid);
+			sio_puts(") stopped by signal ");
+			sio_putl(WSTOPSIG(status));
+			sio_puts("\n");
+        }
+		else if (WIFSIGNALED(status))							// child process terminated due to uncaught signal
+		{
+			printf("Job [1] (%d) terminated by signal %d\n", pid, WTERMSIG(status));
+			deletejob(job_list, pid);
+		}
+	}
+    unblock_signals();
     return;
 }
 
 /* 
- * <What does sigint_handler do?>
+ * handles sigint signal
  */
 void sigint_handler(int sig) 
 {
-    return;
+	block_signals();
+	Kill(fgpid(job_list), SIGINT);  
+	unblock_signals();  
+	return;
 }
 
 /*
- * <What does sigtstp_handler do?>
+ * handles sig stop handler
  */
 void sigtstp_handler(int sig) 
 {
+	block_signals();
+	Kill(fgpid(job_list), SIGTSTP);
+	unblock_signals();
     return;
 }
 
