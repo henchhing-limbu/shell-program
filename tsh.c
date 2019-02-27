@@ -232,7 +232,7 @@ void handle_background(const char *cmdline, pid_t pid)
 void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
 {
     addjob(job_list, pid, FG, cmdline);
-    while (!user_interrupt) {
+	while (!user_interrupt) {
         Sigsuspend(mask);
     }
     user_interrupt = 0;
@@ -274,7 +274,9 @@ void sigchld_handler(int sig)
         {
             struct job_t *job = getjobpid(job_list, pid);
             job->state = ST;
-			sio_puts("Job [1] (");
+			sio_puts("Job [");
+			sio_putl(job->jid);
+			sio_puts("] (");
 			sio_putl(pid);
 			sio_puts(") stopped by signal ");
 			sio_putl(WSTOPSIG(status));
@@ -282,7 +284,15 @@ void sigchld_handler(int sig)
         }
 		else if (WIFSIGNALED(status))							// child process terminated due to uncaught signal
 		{
-			printf("Job [1] (%d) terminated by signal %d\n", pid, WTERMSIG(status));
+			struct job_t *job = getjobpid(job_list, pid);
+			sio_puts("Job [");
+			sio_putl(job->jid);
+			sio_puts("] (");
+			sio_putl(pid);
+			sio_puts(") terminated by signal ");
+			sio_putl(WTERMSIG(status));
+			sio_puts("\n");
+
 			deletejob(job_list, pid);
 		}
 	}
