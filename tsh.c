@@ -172,11 +172,46 @@ void eval(const char *cmdline)
     }
     else if (token.builtin == BUILTIN_FG)                   // builtin foreground job
     {
-        printf("This is foreground job\n");
+		block_signals();
+		int s = strlen(token.argv[1]);
+		char str_job_id[s];
+		memcpy(str_job_id, token.argv[1] + 1, s-1);
+		str_job_id[s-1] = '\0';
+		int job_id = atoi (str_job_id);
+		struct job_t *job = getjobjid(job_list, job_id);
+		job->state = FG;
+	
+		/*	
+		sio_puts("[");
+		sio_putl(job->jid);
+		sio_puts("] (");
+		sio_putl(job->pid);
+		sio_puts(")  ");
+		sio_puts(job->cmdline);
+		sio_puts("\n");
+		unblock_signals();
+		*/
     }
     else if (token.builtin == BUILTIN_BG)                   // built in background job
     {
-        printf("This is background job\n");
+		block_signals();
+		int s = strlen(token.argv[1]);
+		char str_job_id[s];
+		memcpy(str_job_id, token.argv[1] + 1, s-1);
+		str_job_id[s-1] = '\0';
+		int job_id = atoi (str_job_id);
+		struct job_t *job = getjobjid(job_list, job_id);
+		job->state = BG;
+		
+		sio_puts("[");
+		sio_putl(job->jid);
+		sio_puts("] (");
+		sio_putl(job->pid);
+		sio_puts(")  ");
+		sio_puts(job->cmdline);
+		sio_puts("\n");
+		unblock_signals();
+	
     }
     
     else                                                    // Non builtin commands
