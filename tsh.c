@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 
     // Initialize the job list
     initjobs(job_list);
-    
+
     // initially user interrupt 0
     user_interrupt = 0;
 
@@ -155,6 +155,7 @@ void eval(const char *cmdline)
     
     parse_result = parseline(cmdline, &token);		    // Parse command line
 
+	sigset_t old_mask = block_signals();
     if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
     {
         return;
@@ -166,13 +167,13 @@ void eval(const char *cmdline)
     }
     else if (token.builtin == BUILTIN_JOBS)                 // builtin JOBS command
     {
-	block_signals();
         listjobs(job_list, STDOUT_FILENO);
         unblock_signals();
     }
     else if (token.builtin == BUILTIN_FG)                   // builtin foreground job
     {
-		block_signals();
+		// TODO: No need to use memcpy here
+		// TODO: Make use of pointers
 		int s = strlen(token.argv[1]);
 		char str_job_id[s];
 		memcpy(str_job_id, token.argv[1] + 1, s-1);
@@ -180,21 +181,17 @@ void eval(const char *cmdline)
 		int job_id = atoi (str_job_id);
 		struct job_t *job = getjobjid(job_list, job_id);
 		job->state = FG;
-	
-		/*	
-		sio_puts("[");
-		sio_putl(job->jid);
-		sio_puts("] (");
-		sio_putl(job->pid);
-		sio_puts(")  ");
-		sio_puts(job->cmdline);
-		sio_puts("\n");
-		unblock_signals();
-		*/
+		Kill(- job->pid, SIGCONT);
+		
+		while (!user_interrupt) {
+        	Sigsuspend(&old_mask);
+    	}
+    	user_interrupt = 0;
+    	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
+		unblock_signals();	
     }
     else if (token.builtin == BUILTIN_BG)                   // built in background job
     {
-		block_signals();
 		int s = strlen(token.argv[1]);
 		char str_job_id[s];
 		memcpy(str_job_id, token.argv[1] + 1, s-1);
@@ -202,6 +199,7 @@ void eval(const char *cmdline)
 		int job_id = atoi (str_job_id);
 		struct job_t *job = getjobjid(job_list, job_id);
 		job->state = BG;
+		Kill(-job->pid, SIGCONT);
 		
 		sio_puts("[");
 		sio_putl(job->jid);
@@ -212,12 +210,10 @@ void eval(const char *cmdline)
 		sio_puts("\n");
 		unblock_signals();
 	
-    }
-    
+    } 
     else                                                    // Non builtin commands
     {
-	sigset_t old_mask = block_signals();
-        pid_t pid = Fork();                                 // fork the current process
+		pid_t pid = Fork();                                 // fork the current process
         if (pid > 0)                                        // parent process
         {       
             if (parse_result == PARSELINE_FG)               // Foreground job
@@ -239,8 +235,17 @@ void eval(const char *cmdline)
             Signal(SIGTSTP, SIG_DFL);
             
             Setpgid(0, 0);				    				// set new process id group for child process
-            
-            Execve(token.argv[0], token.argv, environ);	    // executing the job
+            if (token.infile)
+			{
+				int file_descr = Open(token.infile, O_RDONLY, S_IRWXU);
+				Dup2(file_descr,  STDIN_FILENO);
+			}
+			if (token.outfile) 
+			{
+				int file_descr = Open(token.outfile, O_WRONLY, S_IRWXU);
+				Dup2(file_descr,  STDOUT_FILENO);
+			}
+            Execve(token.argv[0], token.argv, environ);	// executing the job
         }
 		unblock_signals();  
     }
@@ -256,9 +261,6 @@ void handle_background(const char *cmdline, pid_t pid)
     struct job_t *j = getjobpid(job_list, pid);        
     printf("[%d] (%d) %s\n", j->jid, pid, cmdline);
     Signal(SIGCHLD, sigchld_handler);
-    // Signal(SIGINT, sigint_handler);
-    // Signal(SIGTSTP, sigtstp_handler);
-    // unblock_signals();
 }
 
 /*
@@ -272,7 +274,6 @@ void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
     }
     user_interrupt = 0;
     Sigprocmask(SIG_UNBLOCK, mask, NULL);
-    // unblock_signals();
 }
 
 /*****************
@@ -296,10 +297,6 @@ void sigchld_handler(int sig)
             break;
         
         fg_pid = fgpid(job_list);
-        if (pid == fg_pid)    
-		{
-            user_interrupt = 1;
-		}
 		
 		if  (WIFEXITED(status))								// child process terminated normally
         {
@@ -330,6 +327,10 @@ void sigchld_handler(int sig)
 
 			deletejob(job_list, pid);
 		}
+		 if (pid == fg_pid)    
+		{
+            user_interrupt = 1;
+		}
 	}
     unblock_signals();
     return;
@@ -341,7 +342,7 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig) 
 {
 	block_signals();
-	Kill(fgpid(job_list), SIGINT);  
+	Kill(-fgpid(job_list), SIGINT);  
 	unblock_signals();  
 	return;
 }
@@ -352,7 +353,7 @@ void sigint_handler(int sig)
 void sigtstp_handler(int sig) 
 {
 	block_signals();
-	Kill(fgpid(job_list), SIGTSTP);
+	Kill(-fgpid(job_list), SIGTSTP);
 	unblock_signals();
     return;
 }
