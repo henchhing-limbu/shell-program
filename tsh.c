@@ -144,7 +144,9 @@ int main(int argc, char **argv)
  */
 
 /* 
- * <What does eval do?>
+ * eval -
+ * parse the command line
+ * 
  */
 void eval(const char *cmdline) 
 {
@@ -271,7 +273,12 @@ void eval(const char *cmdline)
 }
 
 /*
- * handles non built in backgorund job
+ * handle_background - 
+ * 		-> adds job to the job list
+ * 		-> overwrites the default SIGCHLD hanler with custom
+ * cmdline : command line arguments  
+ * pid     : process id of the job
+ *          
  */
 void handle_background(const char *cmdline, pid_t pid)
 {
@@ -282,7 +289,12 @@ void handle_background(const char *cmdline, pid_t pid)
 }
 
 /*
- * handles non built in foreground job 
+ * handle_foreground -
+ * 		-> adds job to the job list
+ * 		-> suspend process until signal not in mask is delivered
+ * cmdline : command line arguments
+ * pid     : process id of the job
+ * mask    : signal mask used by sigsuspend
  */ 
 void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
 {
@@ -299,8 +311,22 @@ void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
  *****************/
 
 /* 
- * handles sigchld handler
- */
+ * sig: signal from child process that invoked sigchild handler
+ * 
+ * sigchld_handler - 
+ * Invoked when the child process state changes
+ * If child process terminated normally:
+ * 		->	delete job from the job list
+ * If child process stopped:
+ *		-> change job state to ST
+ *		-> print info on stopped job
+ * If child process terminated due to uncaught signal:
+ *		-> delete job from job list
+ *		-> print info on terminated job
+ * If foreground child process;
+ *		-> assign 1 to user_interrupt
+ * 
+ */ 
 void sigchld_handler(int sig) 
 {
     block_signals();
@@ -369,7 +395,9 @@ void sigchld_handler(int sig)
 }
 
 /* 
- * handles sigint signal
+ * sig: signal from child process that invoked the sigint handler
+ * sigint_handler - forwards SIGINT to every process in foreground
+ * process group 
  */
 void sigint_handler(int sig) 
 {
@@ -380,7 +408,9 @@ void sigint_handler(int sig)
 }
 
 /*
- * handles sig stop handler
+ * sig: signal from child process that invoked the sigtstp handler
+ * sigtstp_handler - forwards SIGTSTP to every process in foreground
+ * process group 
  */
 void sigtstp_handler(int sig) 
 {
