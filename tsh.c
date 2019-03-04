@@ -41,6 +41,7 @@ void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask);
 
 // global variables
 int user_interrupt;
+sigset_t mask, old_mask;
 
 /*
  * <Write main's function header documentation. What does main do?>
@@ -150,12 +151,18 @@ int main(int argc, char **argv)
  */
 void eval(const char *cmdline) 
 {
-    parseline_return parse_result;     
-    struct cmdline_tokens token;
+	// create a mask
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGCHLD);
+    Sigaddset(&mask, SIGINT);
+    Sigaddset(&mask, SIGTSTP);
+    Sigprocmask(SIG_BLOCK, &mask, &old_mask);
+    
+	parseline_return parse_result;     
+	struct cmdline_tokens token;
     // Parse command line
     parse_result = parseline(cmdline, &token);		  
 
-	sigset_t old_mask = block_signals();
     if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
     {
         return;
@@ -169,7 +176,7 @@ void eval(const char *cmdline)
     else if (token.builtin == BUILTIN_JOBS)                
     {
         listjobs(job_list, STDOUT_FILENO);
-        unblock_signals();
+		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
     }
 	// builtin foreground job
     else if (token.builtin == BUILTIN_FG)                   
@@ -194,7 +201,7 @@ void eval(const char *cmdline)
     	user_interrupt = 0;
     	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
 
-		unblock_signals();	
+		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
     }
 	// built in background job
     else if (token.builtin == BUILTIN_BG)                   
@@ -221,7 +228,7 @@ void eval(const char *cmdline)
 		sio_puts(job->cmdline);
 		sio_puts("\n");
 
-		unblock_signals();	
+		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
     } 
     // Non builtin commands
 	else                                                    
@@ -243,8 +250,8 @@ void eval(const char *cmdline)
         }
         // child process
         else if (pid == 0) {     			    		
-            unblock_signals();
-            
+            Sigprocmask(SIG_UNBLOCK, &mask, NULL);
+
 			// Restore the signals to default
             Signal(SIGCHLD, SIG_DFL);
             Signal(SIGINT, SIG_DFL);
@@ -267,7 +274,7 @@ void eval(const char *cmdline)
 			}
             Execve(token.argv[0], token.argv, environ);
         }
-		unblock_signals();  
+		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
     }
     return;
 }
@@ -275,7 +282,6 @@ void eval(const char *cmdline)
 /*
  * handle_background - 
  * 		-> adds job to the job list
- * 		-> overwrites the default SIGCHLD hanler with custom
  * cmdline : command line arguments  
  * pid     : process id of the job
  *          
@@ -285,7 +291,6 @@ void handle_background(const char *cmdline, pid_t pid)
     addjob(job_list, pid, BG, cmdline);                 
     struct job_t *j = getjobpid(job_list, pid);        
     printf("[%d] (%d) %s\n", j->jid, pid, cmdline);
-    Signal(SIGCHLD, sigchld_handler);
 }
 
 /*
@@ -306,6 +311,32 @@ void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
     Sigprocmask(SIG_UNBLOCK, mask, NULL);
 }
 
+void state_change_info(int jid, int pid, int signum, char change)
+{
+	switch (change)
+	{
+		// job stopped
+		case 'S':
+			Sio_puts("Job [");
+			Sio_putl(jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") stopped by signal ");
+			Sio_putl(signum);
+			Sio_puts("\n");
+			break;
+		// job terminated
+		case 'T':
+			Sio_puts("Job [");
+			Sio_putl(jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") terminated by signal ");
+			Sio_putl(signum);
+			Sio_puts("\n");
+			break;
+	}
+}
 /*****************
  * Signal handlers
  *****************/
@@ -329,7 +360,7 @@ void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
  */ 
 void sigchld_handler(int sig) 
 {
-    block_signals();
+	Sigprocmask(SIG_BLOCK, &mask, NULL);
 
     int status;
     pid_t pid, fg_pid;
@@ -356,29 +387,17 @@ void sigchld_handler(int sig)
 			// change job state in job list to stop
             struct job_t *job = getjobpid(job_list, pid);
             job->state = ST;
-
-			// print the info on stopped signals
-			sio_puts("Job [");
-			sio_putl(job->jid);
-			sio_puts("] (");
-			sio_putl(pid);
-			sio_puts(") stopped by signal ");
-			sio_putl(WSTOPSIG(status));
-			sio_puts("\n");
+		
+			// print stopped job info	
+			state_change_info(job->jid, pid, WSTOPSIG(status), 'S');
         }
 		// child process terminated due to uncaught signal
 		else if (WIFSIGNALED(status))						
 		{
 			struct job_t *job = getjobpid(job_list, pid);
 			
-			// print the info on terminated signals	
-			sio_puts("Job [");
-			sio_putl(job->jid);
-			sio_puts("] (");
-			sio_putl(pid);
-			sio_puts(") terminated by signal ");
-			sio_putl(WTERMSIG(status));
-			sio_puts("\n");
+			// print the info on terminated process	
+			state_change_info(job->jid, pid, WTERMSIG(status), 'T');
 			
 			// deleting the terminated job from job list
 			deletejob(job_list, pid);
@@ -390,8 +409,8 @@ void sigchld_handler(int sig)
             user_interrupt = 1;
 		}
 	}
-    unblock_signals();
-    return;
+    Sigprocmask(SIG_UNBLOCK, &mask, NULL);
+	return;
 }
 
 /* 
@@ -401,9 +420,9 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
-	block_signals();
+	Sigprocmask(SIG_BLOCK, &mask, NULL);
 	Kill(-fgpid(job_list), SIGINT);  
-	unblock_signals();  
+	Sigprocmask(SIG_UNBLOCK, &mask, NULL);
 	return;
 }
 
@@ -414,37 +433,8 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-	block_signals();
+	Sigprocmask(SIG_BLOCK, &mask, NULL);
 	Kill(-fgpid(job_list), SIGTSTP);
-	unblock_signals();
+	Sigprocmask(SIG_UNBLOCK, &mask, NULL);
     return;
-}
-
-/*
- * block SIGCHLD, SIGINT, and SIGTSTP signals
- */
-sigset_t block_signals() 
-{
-    sigset_t mask;
-    Sigemptyset(&mask);
-    Sigaddset(&mask, SIGCHLD);
-    Sigaddset(&mask, SIGINT);
-    Sigaddset(&mask, SIGTSTP);
-    sigset_t old_mask;
-    Sigprocmask(SIG_BLOCK, &mask, &old_mask);
-    return old_mask;
-}
-
-/*
- * unblock SIGCHLD, SIGINT, and SIGTSTP signals
- */
-void unblock_signals() 
-{
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGTSTP);
-    sigset_t old_mask;
-    sigprocmask(SIG_UNBLOCK, &mask, &old_mask);
 }
