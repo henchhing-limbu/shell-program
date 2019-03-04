@@ -33,11 +33,11 @@ void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 void sigquit_handler(int sig);
 
-// TODO:
-sigset_t block_signals();
-void unblock_signals();
 void handle_background(const char *cmdline, pid_t pid);
-void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask);
+void handle_foreground(const char *cmdline, pid_t pid);
+void state_bg_jobs(struct job_t *job);
+void state_change_info(int jid, int pid, int signum, char change);
+int get_job_id(struct cmdline_tokens token);
 
 // global variables
 int user_interrupt;
@@ -182,11 +182,7 @@ void eval(const char *cmdline)
     else if (token.builtin == BUILTIN_FG)                   
     {
 		// parse the argument to get job id
-		int s = strlen(token.argv[1]);
-		char str_job_id[s];
-		memcpy(str_job_id, token.argv[1] + 1, s-1);
-		str_job_id[s-1] = '\0';
-		int job_id = atoi (str_job_id);
+		int job_id = get_job_id(token);
 
 		// change the job state to FG
 		// forward SIGCONT signal to every associated FG child process
@@ -207,11 +203,7 @@ void eval(const char *cmdline)
     else if (token.builtin == BUILTIN_BG)                   
     {
 		// parse the argument to get job id
-		int s = strlen(token.argv[1]);
-		char str_job_id[s];
-		memcpy(str_job_id, token.argv[1] + 1, s-1);
-		str_job_id[s-1] = '\0';
-		int job_id = atoi (str_job_id);
+		int job_id = get_job_id(token); 
 		
 		// change the job state to BG
 		// forward SIGCONT signal to every associated BG child process
@@ -219,15 +211,9 @@ void eval(const char *cmdline)
 		job->state = BG;
 		Kill(-job->pid, SIGCONT);
 		
-		// print the background jobs info
-		sio_puts("[");
-		sio_putl(job->jid);
-		sio_puts("] (");
-		sio_putl(job->pid);
-		sio_puts(")  ");
-		sio_puts(job->cmdline);
-		sio_puts("\n");
-
+		// print background job info	
+		state_bg_jobs(job);	
+	
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
     } 
     // Non builtin commands
@@ -240,7 +226,7 @@ void eval(const char *cmdline)
             if (parse_result == PARSELINE_FG)               
             {   
                 // handles and executes foreground job 
-				handle_foreground(cmdline, pid, &old_mask);
+				handle_foreground(cmdline, pid);
             }
             else if (parse_result == PARSELINE_BG)   
             {
@@ -290,7 +276,7 @@ void handle_background(const char *cmdline, pid_t pid)
 {
     addjob(job_list, pid, BG, cmdline);                 
     struct job_t *j = getjobpid(job_list, pid);        
-    printf("[%d] (%d) %s\n", j->jid, pid, cmdline);
+	state_bg_jobs(j);	
 }
 
 /*
@@ -301,16 +287,24 @@ void handle_background(const char *cmdline, pid_t pid)
  * pid     : process id of the job
  * mask    : signal mask used by sigsuspend
  */ 
-void handle_foreground(const char *cmdline, pid_t pid, sigset_t *mask)
+void handle_foreground(const char *cmdline, pid_t pid)
 {
     addjob(job_list, pid, FG, cmdline);
 	while (!user_interrupt) {
-        Sigsuspend(mask);
+        Sigsuspend(&old_mask);
     }
     user_interrupt = 0;
-    Sigprocmask(SIG_UNBLOCK, mask, NULL);
+    Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
 }
 
+/*
+ * state_change_info -
+ * 		-> prints info on job that changed state
+ * jid 		: job id
+ * pid  	: process id
+ * signum	: signal that changed the job state
+ * change	: char that denotes type of change in job state
+ */
 void state_change_info(int jid, int pid, int signum, char change)
 {
 	switch (change)
@@ -336,6 +330,37 @@ void state_change_info(int jid, int pid, int signum, char change)
 			Sio_puts("\n");
 			break;
 	}
+}
+
+/*
+ * state_bg_jobs - display the background job info
+ * job		: pointer to the associated background job in job list
+ */
+void state_bg_jobs(struct job_t *job)
+{
+	// print the background jobs info
+	sio_puts("[");
+	sio_putl(job->jid);
+	sio_puts("] (");
+	sio_putl(job->pid);
+	sio_puts(")  ");
+	sio_puts(job->cmdline);
+	sio_puts("\n");
+}
+
+/*
+ *	get_job_id - parse the token to get job id
+ *	token	: struct that contains commandline tokens
+ *	return	: job id 
+ */
+int get_job_id(struct cmdline_tokens token)
+{
+	int s = strlen(token.argv[1]);
+	char str_job_id[s];
+	memcpy(str_job_id, token.argv[1] + 1, s-1);
+	str_job_id[s-1] = '\0';
+	int job_id = atoi (str_job_id);
+	return job_id;
 }
 /*****************
  * Signal handlers
