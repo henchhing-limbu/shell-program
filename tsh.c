@@ -42,140 +42,164 @@ int get_job_id(struct cmdline_tokens token);
 // global variables
 int user_interrupt;
 sigset_t mask, old_mask;
+int def_in_desc, def_out_desc;
 
 /*
- * <Write main's function header documentation. What does main do?>
- * "Each function should be prefaced with a comment describing the purpose
- *  of the function (in a sentence or two), the function's arguments and
- *  return value, any error cases that are relevant to the caller,
- *  any pertinent side effects, and any assumptions that the function makes."
+ * main -
+ * 		-> sets the signal handlers
+ *		-> creates shell prompt "tsh->" and waits for user input in a loop
+ *		-> parses the command line to display needed info
+ *		-> calls eval to handle the input command
+ *
+ * argc		: number of arguments from command line
+ * argv		: commandline arguments
+ *
+ * return 	: exit code
  */
 int main(int argc, char **argv) 
 {
-    char c;
-    char cmdline[MAXLINE_TSH];  // Cmdline for fgets
-    bool emit_prompt = true;    // Emit prompt (default)
+	char c;
+	char cmdline[MAXLINE_TSH];  // Cmdline for fgets
+	bool emit_prompt = true;    // Emit prompt (default)
 
-    // Redirect stderr to stdout (so that driver will get all output
-    // on the pipe connected to stdout)
-    Dup2(STDOUT_FILENO, STDERR_FILENO); 
+	// Redirect stderr to stdout (so that driver will get all output
+	// on the pipe connected to stdout)
+	Dup2(STDOUT_FILENO, STDERR_FILENO); 
+  
+	// Parse the command line
+	while ((c = getopt(argc, argv, "hvp")) != EOF)
+	{
+		switch (c)
+		{
+			case 'h':                   // Prints help message
+				usage();
+				break;
+			case 'v':                   // Emits additional diagnostic info
+				verbose = true;
+				break;
+			case 'p':                   // Disables prompt printing
+				emit_prompt = false;  
+				break;
+			default:
+				usage();
+		}
+	}
+
+	// Install the signal handlers
+	Signal(SIGINT,  sigint_handler);   // Handles ctrl-c
+	Signal(SIGTSTP, sigtstp_handler);  // Handles ctrl-z
+	Signal(SIGCHLD, sigchld_handler);  // Handles terminated or stopped child
+
+	Signal(SIGTTIN, SIG_IGN);
+	Signal(SIGTTOU, SIG_IGN);
+
+	// trace0
+	Signal(SIGQUIT, sigquit_handler); 
+
+	// Initialize the job list
+	initjobs(job_list);
+
+	// initialize user_interrupt to 0
+	user_interrupt = 0;
+	
+	// initializing def_in_desc and def_out_desc
+	// def_in_desc = dup(STDIN_FILENO);
+	// def_out_desc = dup(STDOUT_FILENO);
+
+	// Execute the shell's read/eval loop
+	while (true)
+	{
+		// prints the prompt tsh->
+		if (emit_prompt)
+        	{
+            		printf("%s", prompt);
+            		fflush(stdout);
+        	}
+
+        	if ((fgets(cmdline, MAXLINE_TSH, stdin) == NULL) && ferror(stdin))
+        	{
+			app_error("fgets error");
+        	}
+
+        	if (feof(stdin))
+        	{ 
+            		// End of file (ctrl-d)
+            		printf ("\n");
+            		fflush(stdout);
+            		fflush(stderr);
+            		return 0;
+        	}
+        
+        	// Remove the trailing newline
+        	cmdline[strlen(cmdline)-1] = '\0';
+        
+        	// Evaluate the command line
+        	eval(cmdline);
+        
+        	fflush(stdout);
+    	} 
     
-    // Parse the command line
-    while ((c = getopt(argc, argv, "hvp")) != EOF)
-    {
-        switch (c)
-        {
-        case 'h':                   // Prints help message
-            usage();
-            break;
-        case 'v':                   // Emits additional diagnostic info
-            verbose = true;
-            break;
-        case 'p':                   // Disables prompt printing
-            emit_prompt = false;  
-            break;
-        default:
-            usage();
-        }
-    }
-
-    // Install the signal handlers
-    Signal(SIGINT,  sigint_handler);   // Handles ctrl-c
-    Signal(SIGTSTP, sigtstp_handler);  // Handles ctrl-z
-    Signal(SIGCHLD, sigchld_handler);  // Handles terminated or stopped child
-
-    Signal(SIGTTIN, SIG_IGN);
-    Signal(SIGTTOU, SIG_IGN);
-
-    // trace0
-    Signal(SIGQUIT, sigquit_handler); 
-
-    // Initialize the job list
-    initjobs(job_list);
-
-    // initialize user_interrupt to 0
-    user_interrupt = 0;
-
-    // Execute the shell's read/eval loop
-    while (true)
-    {
-        // prints the prompt tsh->
-        if (emit_prompt)
-        {
-            printf("%s", prompt);
-            fflush(stdout);
-        }
-
-        if ((fgets(cmdline, MAXLINE_TSH, stdin) == NULL) && ferror(stdin))
-        {
-            app_error("fgets error");
-        }
-
-        if (feof(stdin))
-        { 
-            // End of file (ctrl-d)
-            printf ("\n");
-            fflush(stdout);
-            fflush(stderr);
-            return 0;
-        }
-        
-        // Remove the trailing newline
-        cmdline[strlen(cmdline)-1] = '\0';
-        
-        // Evaluate the command line
-        eval(cmdline);
-        
-        fflush(stdout);
-    } 
-    
-    return -1; // control never reaches here
+    	return -1; // control never reaches here
 }
-
-
-/* Handy guide for eval:
- *
- * If the user has requested a built-in command (quit, jobs, bg or fg),
- * then execute it immediately. Otherwise, fork a child process and
- * run the job in the context of the child. If the job is running in
- * the foreground, wait for it to terminate and then return.
- * Note: each child process must have a unique process group ID so that our
- * background children don't receive SIGINT (SIGTSTP) from the kernel
- * when we type ctrl-c (ctrl-z) at the keyboard.
- */
 
 /* 
  * eval -
- * parse the command line
- * 
+ * 	-> parse the command line
+ * 	-> executes the builtin commands
+ *	-> forks and runs the job in context of child process
+ *	-> calls helper functions to handle background and foreground jobs
+ *	-> calls helper functions to display background jobs
+ *
+ * cmdline : command entered in the shell
  */
 void eval(const char *cmdline) 
 {
 	// create a mask
-    Sigemptyset(&mask);
-    Sigaddset(&mask, SIGCHLD);
-    Sigaddset(&mask, SIGINT);
-    Sigaddset(&mask, SIGTSTP);
-    Sigprocmask(SIG_BLOCK, &mask, &old_mask);
-    
-	parseline_return parse_result;     
+	Sigemptyset(&mask);
+	Sigaddset(&mask, SIGCHLD);
+	Sigaddset(&mask, SIGINT);
+	Sigaddset(&mask, SIGTSTP);
+	Sigprocmask(SIG_BLOCK, &mask, &old_mask);
+
+	parseline_return parse_result;    
 	struct cmdline_tokens token;
-    // Parse command line
-    parse_result = parseline(cmdline, &token);		  
+	// Parse command line
+	parse_result = parseline(cmdline, &token);		  
 
     if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
     {
         return;
     }
+	
+	int in_desc = STDIN_FILENO;
+	int out_desc = STDOUT_FILENO; 
+	// I/O redirection for builtin commands
+	if (token.builtin != BUILTIN_NONE)	
+	{
+		// input redirection
+ 		if (token.infile)
+		{
+			in_desc = Open(token.infile, O_RDONLY, S_IRWXU);
+			def_in_desc = dup(STDIN_FILENO);
+			Dup2(in_desc, STDIN_FILENO);
+		}
+		// output redirection
+		if (token.outfile)
+		{
+			out_desc = Open(token.outfile, O_WRONLY | O_CREAT, S_IRWXU);
+			def_out_desc = dup(STDOUT_FILENO);
+			Dup2(out_desc, STDOUT_FILENO);
+		}
+	}
+
     // builtin QUIT command
     if (token.builtin == BUILTIN_QUIT)                      
-    {
         exit(0); 
-    } 
+	
 	// builtin JOBS command
     else if (token.builtin == BUILTIN_JOBS)                
     {
-        listjobs(job_list, STDOUT_FILENO);
+	    listjobs(job_list, STDOUT_FILENO);
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
     }
 	// builtin foreground job
@@ -195,8 +219,8 @@ void eval(const char *cmdline)
         	Sigsuspend(&old_mask);
     	}
     	user_interrupt = 0;
-    	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
-
+    	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);		
+		
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
     }
 	// built in background job
@@ -215,8 +239,9 @@ void eval(const char *cmdline)
 		state_bg_jobs(job);	
 	
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
-    } 
-    // Non builtin commands
+    }
+    
+	// Non builtin commands
 	else                                                    
     {
 		pid_t pid = Fork();
@@ -235,7 +260,8 @@ void eval(const char *cmdline)
             }
         }
         // child process
-        else if (pid == 0) {     			    		
+        else if (pid == 0) 
+		{     			    		
             Sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
 			// Restore the signals to default
@@ -245,23 +271,40 @@ void eval(const char *cmdline)
 
             // set new process id group for child process
             Setpgid(0, 0);
-			
 			// input redirection				    				
             if (token.infile)
 			{
-				int file_descr = Open(token.infile, O_RDONLY, S_IRWXU);
-				Dup2(file_descr,  STDIN_FILENO);
+				in_desc = Open(token.infile, O_RDONLY, S_IRWXU);
+				Dup2(in_desc,  STDIN_FILENO);
 			}
 			// output redirection
 			if (token.outfile) 
 			{
-				int file_descr = Open(token.outfile, O_WRONLY, S_IRWXU);
-				Dup2(file_descr,  STDOUT_FILENO);
+				out_desc = Open(token.outfile, O_WRONLY | O_CREAT, S_IRWXU);
+				Dup2(out_desc,  STDOUT_FILENO);
 			}
             Execve(token.argv[0], token.argv, environ);
         }
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
     }
+	
+	if (token.builtin != BUILTIN_NONE)
+	{
+		// input redirection				    				
+		if (token.infile)
+		{
+			Dup2(def_in_desc, STDIN_FILENO);
+			// Close the infile
+			Close(in_desc);
+		}
+		// output redirection
+		if (token.outfile) 
+		{
+			Dup2(def_out_desc, STDOUT_FILENO);
+			// close the outfile
+			Close(out_desc);
+		}
+	}
     return;
 }
 
@@ -430,9 +473,7 @@ void sigchld_handler(int sig)
 		
 		// foreground child process
 		if (pid == fg_pid)    
-		{
             user_interrupt = 1;
-		}
 	}
     Sigprocmask(SIG_UNBLOCK, &mask, NULL);
 	return;
