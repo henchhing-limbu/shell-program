@@ -1,8 +1,18 @@
 
 /* 
  * tsh - A tiny shell program with job control
- * <The line above is not a sufficient documentation.
- *  You will need to write your program documentation.>
+ * an interactive command-line interpreter that runs programs on behalf of the user. 
+ * repeatedly prints a prompt, waits for a command line on stdin (standard input), and 
+ * then carries out some action, as directed by the contents of the command line.
+ * 
+ * supports the notion of job control, which allows users to move jobs back and forth between 
+ * background and foreground, and to change the process state (running, stopped, terminated) of
+ * the processes in a job.
+ *
+ * provide various built-in commands that support job control
+ *
+ * support the notion of I/O redirection, which allows users to redirect stdin and stdout to i
+ * disk files
  */
 
 #include "tsh_helper.h"
