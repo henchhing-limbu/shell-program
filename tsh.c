@@ -165,11 +165,9 @@ void eval(const char *cmdline)
 	struct cmdline_tokens token;
 	// Parse command line
 	parse_result = parseline(cmdline, &token);		  
-
-    if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
-    {
-        return;
-    }
+	
+	if (parse_result == PARSELINE_ERROR || parse_result == PARSELINE_EMPTY)
+        	return;
 	
 	int in_desc = STDIN_FILENO;
 	int out_desc = STDOUT_FILENO; 
@@ -192,19 +190,19 @@ void eval(const char *cmdline)
 		}
 	}
 
-    // builtin QUIT command
-    if (token.builtin == BUILTIN_QUIT)                      
-        exit(0); 
+	// builtin QUIT command
+	if (token.builtin == BUILTIN_QUIT)                      
+        	exit(0); 
 	
 	// builtin JOBS command
-    else if (token.builtin == BUILTIN_JOBS)                
-    {
-	    listjobs(job_list, STDOUT_FILENO);
+	else if (token.builtin == BUILTIN_JOBS)                
+	{
+		listjobs(job_list, STDOUT_FILENO);
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
-    }
+	}
 	// builtin foreground job
-    else if (token.builtin == BUILTIN_FG)                   
-    {
+	else if (token.builtin == BUILTIN_FG)                   
+	{
 		// parse the argument to get job id
 		int job_id = get_job_id(token);
 
@@ -221,11 +219,11 @@ void eval(const char *cmdline)
     	user_interrupt = 0;
     	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);		
 		
-		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
-    }
+	Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
+	}
 	// built in background job
-    else if (token.builtin == BUILTIN_BG)                   
-    {
+	else if (token.builtin == BUILTIN_BG)                   
+	{
 		// parse the argument to get job id
 		int job_id = get_job_id(token); 
 		
@@ -239,40 +237,40 @@ void eval(const char *cmdline)
 		state_bg_jobs(job);	
 	
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);	
-    }
+	}
     
 	// Non builtin commands
 	else                                                    
-    {
+	{
 		pid_t pid = Fork();
 		// parent process
-        if (pid > 0)                                        
-        {      
-            if (parse_result == PARSELINE_FG)               
-            {   
-                // handles and executes foreground job 
+        	if (pid > 0)                                        
+        	{      
+            		if (parse_result == PARSELINE_FG)               
+            		{   
+                		// handles and executes foreground job 
 				handle_foreground(cmdline, pid);
-            }
-            else if (parse_result == PARSELINE_BG)   
-            {
+            		}
+            		else if (parse_result == PARSELINE_BG)   
+            		{
 				// handles and executes background job
-                handle_background(cmdline, pid);
-            }
-        }
-        // child process
-        else if (pid == 0) 
+                		handle_background(cmdline, pid);
+            		}
+        	}
+        	// child process
+        	else if (pid == 0) 
 		{     			    		
-            Sigprocmask(SIG_UNBLOCK, &mask, NULL);
+            		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
 			// Restore the signals to default
-            Signal(SIGCHLD, SIG_DFL);
-            Signal(SIGINT, SIG_DFL);
-            Signal(SIGTSTP, SIG_DFL);
+            		Signal(SIGCHLD, SIG_DFL);
+            		Signal(SIGINT, SIG_DFL);
+            		Signal(SIGTSTP, SIG_DFL);
 
-            // set new process id group for child process
-            Setpgid(0, 0);
+            		// set new process id group for child process
+            		Setpgid(0, 0);
 			// input redirection				    				
-            if (token.infile)
+            		if (token.infile)
 			{
 				in_desc = Open(token.infile, O_RDONLY, S_IRWXU);
 				Dup2(in_desc,  STDIN_FILENO);
@@ -283,10 +281,10 @@ void eval(const char *cmdline)
 				out_desc = Open(token.outfile, O_WRONLY | O_CREAT, S_IRWXU);
 				Dup2(out_desc,  STDOUT_FILENO);
 			}
-            Execve(token.argv[0], token.argv, environ);
-        }
+            		Execve(token.argv[0], token.argv, environ);
+        	}
 		Sigprocmask(SIG_UNBLOCK, &mask, NULL);
-    }
+    	}
 	
 	if (token.builtin != BUILTIN_NONE)
 	{
@@ -305,7 +303,7 @@ void eval(const char *cmdline)
 			Close(out_desc);
 		}
 	}
-    return;
+	return;
 }
 
 /*
@@ -317,8 +315,8 @@ void eval(const char *cmdline)
  */
 void handle_background(const char *cmdline, pid_t pid)
 {
-    addjob(job_list, pid, BG, cmdline);                 
-    struct job_t *j = getjobpid(job_list, pid);        
+	addjob(job_list, pid, BG, cmdline);                 
+	struct job_t *j = getjobpid(job_list, pid);        
 	state_bg_jobs(j);	
 }
 
@@ -332,12 +330,12 @@ void handle_background(const char *cmdline, pid_t pid)
  */ 
 void handle_foreground(const char *cmdline, pid_t pid)
 {
-    addjob(job_list, pid, FG, cmdline);
+	addjob(job_list, pid, FG, cmdline);
 	while (!user_interrupt) {
-        Sigsuspend(&old_mask);
-    }
-    user_interrupt = 0;
-    Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
+        	Sigsuspend(&old_mask);
+    	}
+    	user_interrupt = 0;
+    	Sigprocmask(SIG_UNBLOCK, &old_mask, NULL);
 }
 
 /*
@@ -430,35 +428,33 @@ void sigchld_handler(int sig)
 {
 	Sigprocmask(SIG_BLOCK, &mask, NULL);
 
-    int status;
-    pid_t pid, fg_pid;
+    	int status;
+    	pid_t pid, fg_pid;
 
-    while (1)
-    {
-        pid = waitpid(-1, &status, WUNTRACED | WNOHANG);
+    	while (1)
+    	{
+        	pid = waitpid(-1, &status, WUNTRACED | WNOHANG);
 		// No child processes left
-        if (pid < 0)    					
-          break;
+        	if (pid < 0)    					
+          		break;
 		// No child processes with state changed
-        if (pid == 0)   					
-            break;
+        	if (pid == 0)   					
+            		break;
         
-        fg_pid = fgpid(job_list);
+        	fg_pid = fgpid(job_list);
 		// child process terminated normally
 		if  (WIFEXITED(status))								
-        {
-            deletejob(job_list, pid);
-        }
+            		deletejob(job_list, pid);
 		// child process currently stopped
-        else if (WIFSTOPPED(status))							
-        {
+	        else if (WIFSTOPPED(status))							
+       		{
 			// change job state in job list to stop
-            struct job_t *job = getjobpid(job_list, pid);
-            job->state = ST;
+            		struct job_t *job = getjobpid(job_list, pid);
+            		job->state = ST;
 		
 			// print stopped job info	
 			state_change_info(job->jid, pid, WSTOPSIG(status), 'S');
-        }
+        	}
 		// child process terminated due to uncaught signal
 		else if (WIFSIGNALED(status))						
 		{
@@ -473,9 +469,9 @@ void sigchld_handler(int sig)
 		
 		// foreground child process
 		if (pid == fg_pid)    
-            user_interrupt = 1;
+            		user_interrupt = 1;
 	}
-    Sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    	Sigprocmask(SIG_UNBLOCK, &mask, NULL);
 	return;
 }
 
@@ -502,5 +498,5 @@ void sigtstp_handler(int sig)
 	Sigprocmask(SIG_BLOCK, &mask, NULL);
 	Kill(-fgpid(job_list), SIGTSTP);
 	Sigprocmask(SIG_UNBLOCK, &mask, NULL);
-    return;
+	return;
 }
